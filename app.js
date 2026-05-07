@@ -87,103 +87,180 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function calculateCGT() {
         const assets = {};
-        // Group by ISIN
         allTransactions.forEach(t => {
             if (!assets[t.isin]) assets[t.isin] = [];
-            assets[t.isin].push({...t});
+            assets[t.isin].push({ ...t, processedQty: 0 });
         });
 
         const disposals = [];
 
         for (const isin in assets) {
             const txs = assets[isin];
-            const buys = [];
+            const buyPool = [];
 
-            txs.forEach(tx => {
-                if (tx.quantity > 0) {
-                    buys.push({
-                        ...tx,
-                        remainingQty: tx.quantity,
-                        costPerUnit: Math.abs(tx.totalEur) / tx.quantity
+            // Group by Date for Same Day rule
+            const dates = [...new Set(txs.map(t => t.date.getTime()))].sort();
+
+            // Prepare buyPool and sells with all relevant metadata
+            const allBuys = txs.filter(t => t.quantity > 0).map(b => ({
+                ...b,
+                remainingQty: b.quantity,
+                costPerUnit: Math.abs(b.totalEur) / b.quantity
+            }));
+            const allSells = txs.filter(t => t.quantity < 0).map(s => ({
+                ...s,
+                remainingQty: Math.abs(s.quantity)
+            }));
+
+            // Identification Rule 1: Same Day
+            dates.forEach(time => {
+                const dayBuys = allBuys.filter(b => b.date.getTime() === time);
+                const daySells = allSells.filter(s => s.date.getTime() === time);
+                if (dayBuys.length === 0 || daySells.length === 0) return;
+
+                let dayTotalBuyQty = dayBuys.reduce((sum, b) => sum + b.remainingQty, 0);
+                let dayTotalSellQty = daySells.reduce((sum, s) => sum + s.remainingQty, 0);
+                let sameDayMatched = Math.min(dayTotalBuyQty, dayTotalSellQty);
+
+                if (sameDayMatched > 0) {
+                    const avgBuyCostPerUnit = dayBuys.reduce((sum, b) => sum + (b.remainingQty * b.costPerUnit), 0) / dayTotalBuyQty;
+
+                    daySells.forEach(s => {
+                        const matched = (s.remainingQty / dayTotalSellQty) * sameDayMatched;
+                        if (matched > 0) {
+                            const proceeds = (matched / Math.abs(s.quantity)) * s.totalEur;
+                            const cost = matched * avgBuyCostPerUnit;
+                            disposals.push({
+                                ...s,
+                                date: new Date(time),
+                                quantity: -matched,
+                                totalEur: proceeds,
+                                totalCost: cost,
+                                gain: proceeds - cost,
+                                matches: [{ qty: matched, buyDate: new Date(time), rule: 'Same Day' }],
+                                qtyMatched: matched
+                            });
+                            s.remainingQty -= matched;
+                        }
                     });
-                } else {
-                    let qtyToMatch = Math.abs(tx.quantity);
-                    const proceedsPerUnit = tx.totalEur / qtyToMatch;
-                    const matches = [];
 
-                    // Priority 1: Same day rule
-                    const sameDayBuys = buys.filter(b => b.remainingQty > 0 && b.date.getTime() === tx.date.getTime());
-                    for (const buy of sameDayBuys) {
-                        if (qtyToMatch <= 0) break;
-                        const matchedQty = Math.min(qtyToMatch, buy.remainingQty);
-                        matches.push({
-                            buyDate: buy.date,
-                            qty: matchedQty,
-                            cost: matchedQty * buy.costPerUnit,
-                            rule: 'Same Day'
-                        });
-                        buy.remainingQty -= matchedQty;
-                        qtyToMatch -= matchedQty;
-                    }
-
-                    // Priority 2: 4-week rule (acquisitions in 4 weeks preceding)
-                    const fourWeeksAgo = new Date(tx.date);
-                    fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 28);
-
-                    const recentBuys = buys.filter(b => b.remainingQty > 0 && b.date >= fourWeeksAgo && b.date < tx.date);
-                    // Revenue specifies FIFO for these too
-                    recentBuys.sort((a,b) => a.date - b.date);
-
-                    for (const buy of recentBuys) {
-                        if (qtyToMatch <= 0) break;
-                        const matchedQty = Math.min(qtyToMatch, buy.remainingQty);
-                        matches.push({
-                            buyDate: buy.date,
-                            qty: matchedQty,
-                            cost: matchedQty * buy.costPerUnit,
-                            rule: '4-Week Rule'
-                        });
-                        buy.remainingQty -= matchedQty;
-                        qtyToMatch -= matchedQty;
-                    }
-
-                    // Priority 3: Normal FIFO (acquisitions before the 4-week window)
-                    const olderBuys = buys.filter(b => b.remainingQty > 0 && b.date < fourWeeksAgo);
-                    olderBuys.sort((a,b) => a.date - b.date);
-
-                    for (const buy of olderBuys) {
-                        if (qtyToMatch <= 0) break;
-                        const matchedQty = Math.min(qtyToMatch, buy.remainingQty);
-                        matches.push({
-                            buyDate: buy.date,
-                            qty: matchedQty,
-                            cost: matchedQty * buy.costPerUnit,
-                            rule: 'FIFO'
-                        });
-                        buy.remainingQty -= matchedQty;
-                        qtyToMatch -= matchedQty;
-                    }
-
-                    const totalCost = matches.reduce((sum, m) => sum + m.cost, 0);
-                    const gain = tx.totalEur - totalCost;
-
-                    disposals.push({
-                        ...tx,
-                        matches,
-                        totalCost,
-                        gain,
-                        qtyMatched: Math.abs(tx.quantity) - qtyToMatch
+                    let buyRem = sameDayMatched;
+                    dayBuys.forEach(b => {
+                        const matched = Math.min(buyRem, b.remainingQty);
+                        b.remainingQty -= matched;
+                        buyRem -= matched;
                     });
                 }
             });
 
-            // Rule 3: Loss Restriction (Re-acquisition within 4 weeks AFTER)
-            // If a disposal resulted in a loss, and there's a buy within 4 weeks after.
-            // This is complex as it might affect multiple disposals.
-            // Simplified: Mark losses as restricted if a re-acquisition exists within 4 weeks after.
+            // Identification Rule 2: 4 Weeks Preceding (FIFO among them)
+            allSells.filter(s => s.remainingQty > 0).forEach(s => {
+                const fourWeeksAgo = new Date(s.date);
+                fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 28);
+
+                const precedingBuys = allBuys.filter(b => b.remainingQty > 0 && b.date >= fourWeeksAgo && b.date < s.date);
+                if (precedingBuys.length === 0) return;
+
+                let qtyToMatch = s.remainingQty;
+                const matches = [];
+
+                for (const buy of precedingBuys) {
+                    if (qtyToMatch <= 0) break;
+                    const matched = Math.min(qtyToMatch, buy.remainingQty);
+                    matches.push({ qty: matched, buyDate: buy.date, rule: '4-Week Preceding', cost: matched * buy.costPerUnit });
+                    buy.remainingQty -= matched;
+                    qtyToMatch -= matched;
+                }
+
+                if (matches.length > 0) {
+                    const totalCost = matches.reduce((sum, m) => sum + m.cost, 0);
+                    const matchedQty = s.remainingQty - qtyToMatch;
+                    const proceeds = (matchedQty / Math.abs(s.quantity)) * s.totalEur;
+                    disposals.push({
+                        ...s,
+                        quantity: -matchedQty,
+                        totalEur: proceeds,
+                        totalCost,
+                        gain: proceeds - totalCost,
+                        matches,
+                        qtyMatched: matchedQty
+                    });
+                    s.remainingQty = qtyToMatch;
+                }
+            });
+
+            // Identification Rule 3: 4 Weeks Following (FIFO among them)
+            allSells.filter(s => s.remainingQty > 0).forEach(s => {
+                const fourWeeksAfter = new Date(s.date);
+                fourWeeksAfter.setDate(fourWeeksAfter.getDate() + 28);
+
+                const followingBuys = allBuys.filter(b => b.remainingQty > 0 && b.date > s.date && b.date <= fourWeeksAfter);
+                if (followingBuys.length === 0) return;
+
+                let qtyToMatch = s.remainingQty;
+                const matches = [];
+
+                for (const buy of followingBuys) {
+                    if (qtyToMatch <= 0) break;
+                    const matched = Math.min(qtyToMatch, buy.remainingQty);
+                    matches.push({ qty: matched, buyDate: buy.date, rule: '4-Week Following', cost: matched * buy.costPerUnit });
+                    buy.remainingQty -= matched;
+                    qtyToMatch -= matched;
+                }
+
+                if (matches.length > 0) {
+                    const totalCost = matches.reduce((sum, m) => sum + m.cost, 0);
+                    const matchedQty = s.remainingQty - qtyToMatch;
+                    const proceeds = (matchedQty / Math.abs(s.quantity)) * s.totalEur;
+                    disposals.push({
+                        ...s,
+                        quantity: -matchedQty,
+                        totalEur: proceeds,
+                        totalCost,
+                        gain: proceeds - totalCost,
+                        matches,
+                        qtyMatched: matchedQty
+                    });
+                    s.remainingQty = qtyToMatch;
+                }
+            });
+
+            // Identification Rule 4: Normal FIFO (Oldest first)
+            allSells.filter(s => s.remainingQty > 0).forEach(s => {
+                let qtyToMatch = s.remainingQty;
+                const matches = [];
+
+                const availableBuys = allBuys.filter(b => b.remainingQty > 0 && b.date < s.date);
+                for (const buy of availableBuys) {
+                    if (qtyToMatch <= 0) break;
+                    const matched = Math.min(qtyToMatch, buy.remainingQty);
+                    matches.push({ qty: matched, buyDate: buy.date, rule: 'FIFO', cost: matched * buy.costPerUnit });
+                    buy.remainingQty -= matched;
+                    qtyToMatch -= matched;
+                }
+
+                const totalCost = matches.reduce((sum, m) => sum + m.cost, 0);
+                const matchedQty = s.remainingQty - qtyToMatch;
+                const proceeds = (matchedQty / Math.abs(s.quantity)) * s.totalEur;
+                disposals.push({
+                    ...s,
+                    quantity: -matchedQty,
+                    totalEur: proceeds,
+                    totalCost,
+                    gain: proceeds - totalCost,
+                    matches,
+                    qtyMatched: matchedQty
+                });
+                s.remainingQty = qtyToMatch;
+            });
+
+            // Rule 5: Loss Restriction (Section 581(3) TCA 1997)
+            // If any disposal resulted in a loss, and same-class shares were re-acquired within 4 weeks AFTER.
+            // Note: Section 581(3) says "loss arising on the disposal is only allowable against any gain that may accrue on the disposal of the shares reacquired".
             disposals.filter(d => d.isin === isin && d.gain < 0).forEach(d => {
                 const fourWeeksAfter = new Date(d.date);
                 fourWeeksAfter.setDate(fourWeeksAfter.getDate() + 28);
+                // Check if any buy happened within 4 weeks after.
                 const reacquisition = txs.find(t => t.quantity > 0 && t.date > d.date && t.date <= fourWeeksAfter);
                 if (reacquisition) {
                     d.restricted = true;
@@ -238,23 +315,34 @@ document.addEventListener('DOMContentLoaded', () => {
         detailsTableBody.innerHTML = '';
         summary.disposals.forEach(d => {
             const row = document.createElement('tr');
+
+            const matchesHtml = d.matches.map(m =>
+                `${escapeHtml(m.qty.toString())} @ ${escapeHtml(m.buyDate.toLocaleDateString())} (${escapeHtml(m.rule)})`
+            ).join('<br>');
+
             row.innerHTML = `
-                <td>${d.date.toLocaleDateString()}</td>
-                <td>${d.product}</td>
+                <td>${escapeHtml(d.date.toLocaleDateString())}</td>
+                <td>${escapeHtml(d.product)}</td>
                 <td>SELL</td>
-                <td>${Math.abs(d.quantity)}</td>
-                <td>${d.price.toFixed(2)}</td>
-                <td>${d.totalCost.toFixed(2)}</td>
-                <td class="${d.gain >= 0 ? 'gain' : 'loss'}">€${d.gain.toFixed(2)}</td>
+                <td>${escapeHtml(Math.abs(d.quantity).toString())}</td>
+                <td>${escapeHtml(d.price.toFixed(2))}</td>
+                <td>${escapeHtml(d.totalCost.toFixed(2))}</td>
+                <td class="${d.gain >= 0 ? 'gain' : 'loss'}">€${escapeHtml(d.gain.toFixed(2))}</td>
                 <td>
-                    ${d.notes || ''}
+                    ${escapeHtml(d.notes || '')}
                     ${d.qtyMatched < Math.abs(d.quantity) ? 'Partial match!' : ''}
                     <div style="font-size: 0.8em; color: #888;">
-                        ${d.matches.map(m => `${m.qty} @ ${m.buyDate.toLocaleDateString()} (${m.rule})`).join('<br>')}
+                        ${matchesHtml}
                     </div>
                 </td>
             `;
             detailsTableBody.appendChild(row);
         });
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
     }
 });
