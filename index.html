@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Irish CGT Calculator for DeGiro</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Irish CGT Calculator (DeGiro)</h1>
+        <p class="description">
+            Upload your DeGiro account transactions CSV to calculate your Capital Gains Tax.
+            Applies Irish Revenue rules: FIFO, 4-week rule, and annual exemption.
+        </p>
+
+        <div class="upload-section">
+            <input type="file" id="csvFile" accept=".csv">
+            <label for="csvFile" class="button">Select DeGiro CSV</label>
+            <span id="fileName">No file selected</span>
+        </div>
+
+        <div id="results" class="hidden">
+            <div class="controls">
+                <label for="yearSelect">Select Year:</label>
+                <select id="yearSelect"></select>
+            </div>
+
+            <div class="dashboard">
+                <div class="card">
+                    <h3>Gross Gain/Loss</h3>
+                    <p id="grossGain">€0.00</p>
+                </div>
+                <div class="card">
+                    <h3>Allowable Loss</h3>
+                    <p id="allowableLoss">€0.00</p>
+                </div>
+                <div class="card">
+                    <h3>Net Gain</h3>
+                    <p id="netGain">€0.00</p>
+                </div>
+                <div class="card highlight">
+                    <h3>Tax Payable (33%)</h3>
+                    <p id="taxPayable">€0.00</p>
+                </div>
+            </div>
+
+            <div class="details">
+                <h2>Transaction Breakdown</h2>
+                <div class="table-wrapper">
+                    <table id="detailsTable">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Product</th>
+                                <th>Type</th>
+                                <th>Quantity</th>
+                                <th>Price</th>
+                                <th>Cost Basis</th>
+                                <th>Gain/Loss</th>
+                                <th>Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
