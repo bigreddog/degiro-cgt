@@ -135,7 +135,40 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function populatePortfolioModal() {
+    async function fetchLivePrice(isin) {
+        try {
+            // A simple free proxy to Yahoo Finance, no auth required
+            // Yahoo Finance symbol lookup can be tricky, this works decently for many ISINs.
+            const searchUrl = `https://query2.finance.yahoo.com/v1/finance/search?q=${isin}&quotesCount=1`;
+            const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(searchUrl)}`;
+
+            const response = await fetch(proxyUrl);
+            const data = await response.json();
+            const result = JSON.parse(data.contents);
+
+            if (result && result.quotes && result.quotes.length > 0) {
+                const symbol = result.quotes[0].symbol;
+
+                const quoteUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
+                const proxyQuoteUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(quoteUrl)}`;
+
+                const quoteResponse = await fetch(proxyQuoteUrl);
+                const quoteData = await quoteResponse.json();
+                const quoteResult = JSON.parse(quoteData.contents);
+
+                if (quoteResult && quoteResult.chart && quoteResult.chart.result && quoteResult.chart.result.length > 0) {
+                    const price = quoteResult.chart.result[0].meta.regularMarketPrice;
+                    return price;
+                }
+            }
+            return null;
+        } catch (err) {
+            console.error(`Failed to fetch live price for ISIN: ${isin}`, err);
+            return null;
+        }
+    }
+
+    async function populatePortfolioModal() {
         if (!window.currentPortfolio) return;
 
         portfolioTableBody.innerHTML = '';
@@ -148,11 +181,15 @@ document.addEventListener('DOMContentLoaded', () => {
             currentPrices[isin] = asset.lastKnownPrice;
 
             const row = document.createElement('tr');
+
+            // Give inputs an ID so we can target them later
+            const inputId = `price-input-${isin}`;
+
             row.innerHTML = `
                 <td>${escapeHtml(asset.product)}</td>
                 <td>${escapeHtml(asset.remainingQty.toString())}</td>
                 <td>€${escapeHtml(asset.averageCostBasis.toFixed(2))}</td>
-                <td><input type="number" step="0.01" class="price-input" data-isin="${escapeHtml(isin)}" value="${escapeHtml(asset.lastKnownPrice.toFixed(2))}"></td>
+                <td><input type="number" step="0.01" class="price-input" id="${escapeHtml(inputId)}" data-isin="${escapeHtml(isin)}" value="${escapeHtml(asset.lastKnownPrice.toFixed(2))}"></td>
                 <td class="est-gain">€0.00</td>
             `;
             portfolioTableBody.appendChild(row);
@@ -172,6 +209,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
         });
+
+        // Asynchronously fetch live prices and update UI
+        for (const isin in window.currentPortfolio) {
+            const asset = window.currentPortfolio[isin];
+            if (asset.remainingQty <= 0) continue;
+
+            fetchLivePrice(isin).then(livePrice => {
+                if (livePrice !== null && !isNaN(livePrice)) {
+                    const inputElement = document.getElementById(`price-input-${isin}`);
+                    if (inputElement) {
+                        inputElement.value = livePrice.toFixed(2);
+
+                        // Fire an artificial input event to trigger our estimation update
+                        inputElement.dispatchEvent(new Event('input'));
+                    }
+                }
+            });
+        }
     }
 
     function updateEstimates(currentPrices) {
