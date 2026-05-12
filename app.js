@@ -5,6 +5,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const yearSelect = document.getElementById('yearSelect');
     const detailsTableBody = document.querySelector('#detailsTable tbody');
 
+    // Modal elements
+    const viewPortfolioBtn = document.getElementById('viewPortfolioBtn');
+    const portfolioModal = document.getElementById('portfolioModal');
+    const closeModalBtn = document.querySelector('.close');
+    const portfolioTableBody = document.querySelector('#portfolioTable tbody');
+
     let allTransactions = [];
     let yearSummaries = {};
 
@@ -26,14 +32,14 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function processData(csvText) {
-        const rows = parseCSV(csvText);
+        const rows = window.parseCSV(csvText);
         if (rows.length === 0) {
             alert('No valid transactions found.');
             return;
         }
 
         allTransactions = rows.map(row => ({
-            date: parseDate(row['Date']),
+            date: window.parseDate(row['Date']),
             product: row['Product'],
             isin: row['ISIN'],
             quantity: parseFloat(row['Quantity']),
@@ -45,248 +51,9 @@ document.addEventListener('DOMContentLoaded', () => {
         // Sort by date and time (if available, though date is primary)
         allTransactions.sort((a, b) => a.date - b.date);
 
-        calculateCGT();
-    }
-
-    function parseCSV(text) {
-        const lines = text.split(/\r?\n/).filter(line => line.trim());
-        if (lines.length < 2) return [];
-
-        // Detect separator (DeGiro often uses tab or comma)
-        const headerLine = lines[0];
-        let sep = ',';
-        if (headerLine.includes('\t')) sep = '\t';
-
-        const headers = headerLine.split(sep).map(h => h.trim());
-        const result = [];
-
-        for (let i = 1; i < lines.length; i++) {
-            const values = lines[i].split(sep).map(v => v.trim());
-            const obj = {};
-            // DeGiro CSV sometimes has more values than headers or vice versa
-            headers.forEach((header, index) => {
-                if (header) {
-                    obj[header] = values[index];
-                } else {
-                    // Handle unnamed columns (like currency columns in the example)
-                    obj[`_col${index}`] = values[index];
-                }
-            });
-            result.push(obj);
-        }
-        return result;
-    }
-
-    function parseDate(dateStr) {
-        if (!dateStr) return null;
-        const parts = dateStr.split('-');
-        if (parts.length !== 3) return null;
-        // DD-MM-YYYY
-        return new Date(parts[2], parts[1] - 1, parts[0]);
-    }
-
-    function calculateCGT() {
-        const assets = {};
-        allTransactions.forEach(t => {
-            if (!assets[t.isin]) assets[t.isin] = [];
-            assets[t.isin].push({ ...t, processedQty: 0 });
-        });
-
-        const disposals = [];
-
-        for (const isin in assets) {
-            const txs = assets[isin];
-            const buyPool = [];
-
-            // Group by Date for Same Day rule
-            const dates = [...new Set(txs.map(t => t.date.getTime()))].sort();
-
-            // Prepare buyPool and sells with all relevant metadata
-            const allBuys = txs.filter(t => t.quantity > 0).map(b => ({
-                ...b,
-                remainingQty: b.quantity,
-                costPerUnit: Math.abs(b.totalEur) / b.quantity
-            }));
-            const allSells = txs.filter(t => t.quantity < 0).map(s => ({
-                ...s,
-                remainingQty: Math.abs(s.quantity)
-            }));
-
-            // Identification Rule 1: Same Day
-            dates.forEach(time => {
-                const dayBuys = allBuys.filter(b => b.date.getTime() === time);
-                const daySells = allSells.filter(s => s.date.getTime() === time);
-                if (dayBuys.length === 0 || daySells.length === 0) return;
-
-                let dayTotalBuyQty = dayBuys.reduce((sum, b) => sum + b.remainingQty, 0);
-                let dayTotalSellQty = daySells.reduce((sum, s) => sum + s.remainingQty, 0);
-                let sameDayMatched = Math.min(dayTotalBuyQty, dayTotalSellQty);
-
-                if (sameDayMatched > 0) {
-                    const avgBuyCostPerUnit = dayBuys.reduce((sum, b) => sum + (b.remainingQty * b.costPerUnit), 0) / dayTotalBuyQty;
-
-                    daySells.forEach(s => {
-                        const matched = (s.remainingQty / dayTotalSellQty) * sameDayMatched;
-                        if (matched > 0) {
-                            const proceeds = (matched / Math.abs(s.quantity)) * s.totalEur;
-                            const cost = matched * avgBuyCostPerUnit;
-                            disposals.push({
-                                ...s,
-                                date: new Date(time),
-                                quantity: -matched,
-                                totalEur: proceeds,
-                                totalCost: cost,
-                                gain: proceeds - cost,
-                                matches: [{ qty: matched, buyDate: new Date(time), rule: 'Same Day' }],
-                                qtyMatched: matched
-                            });
-                            s.remainingQty -= matched;
-                        }
-                    });
-
-                    let buyRem = sameDayMatched;
-                    dayBuys.forEach(b => {
-                        const matched = Math.min(buyRem, b.remainingQty);
-                        b.remainingQty -= matched;
-                        buyRem -= matched;
-                    });
-                }
-            });
-
-            // Identification Rule 2: 4 Weeks Preceding (FIFO among them)
-            allSells.filter(s => s.remainingQty > 0).forEach(s => {
-                const fourWeeksAgo = new Date(s.date);
-                fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 28);
-
-                const precedingBuys = allBuys.filter(b => b.remainingQty > 0 && b.date >= fourWeeksAgo && b.date < s.date);
-                if (precedingBuys.length === 0) return;
-
-                let qtyToMatch = s.remainingQty;
-                const matches = [];
-
-                for (const buy of precedingBuys) {
-                    if (qtyToMatch <= 0) break;
-                    const matched = Math.min(qtyToMatch, buy.remainingQty);
-                    matches.push({ qty: matched, buyDate: buy.date, rule: '4-Week Preceding', cost: matched * buy.costPerUnit });
-                    buy.remainingQty -= matched;
-                    qtyToMatch -= matched;
-                }
-
-                if (matches.length > 0) {
-                    const totalCost = matches.reduce((sum, m) => sum + m.cost, 0);
-                    const matchedQty = s.remainingQty - qtyToMatch;
-                    const proceeds = (matchedQty / Math.abs(s.quantity)) * s.totalEur;
-                    disposals.push({
-                        ...s,
-                        quantity: -matchedQty,
-                        totalEur: proceeds,
-                        totalCost,
-                        gain: proceeds - totalCost,
-                        matches,
-                        qtyMatched: matchedQty
-                    });
-                    s.remainingQty = qtyToMatch;
-                }
-            });
-
-            // Identification Rule 3: 4 Weeks Following (FIFO among them)
-            allSells.filter(s => s.remainingQty > 0).forEach(s => {
-                const fourWeeksAfter = new Date(s.date);
-                fourWeeksAfter.setDate(fourWeeksAfter.getDate() + 28);
-
-                const followingBuys = allBuys.filter(b => b.remainingQty > 0 && b.date > s.date && b.date <= fourWeeksAfter);
-                if (followingBuys.length === 0) return;
-
-                let qtyToMatch = s.remainingQty;
-                const matches = [];
-
-                for (const buy of followingBuys) {
-                    if (qtyToMatch <= 0) break;
-                    const matched = Math.min(qtyToMatch, buy.remainingQty);
-                    matches.push({ qty: matched, buyDate: buy.date, rule: '4-Week Following', cost: matched * buy.costPerUnit });
-                    buy.remainingQty -= matched;
-                    qtyToMatch -= matched;
-                }
-
-                if (matches.length > 0) {
-                    const totalCost = matches.reduce((sum, m) => sum + m.cost, 0);
-                    const matchedQty = s.remainingQty - qtyToMatch;
-                    const proceeds = (matchedQty / Math.abs(s.quantity)) * s.totalEur;
-                    disposals.push({
-                        ...s,
-                        quantity: -matchedQty,
-                        totalEur: proceeds,
-                        totalCost,
-                        gain: proceeds - totalCost,
-                        matches,
-                        qtyMatched: matchedQty
-                    });
-                    s.remainingQty = qtyToMatch;
-                }
-            });
-
-            // Identification Rule 4: Normal FIFO (Oldest first)
-            allSells.filter(s => s.remainingQty > 0).forEach(s => {
-                let qtyToMatch = s.remainingQty;
-                const matches = [];
-
-                const availableBuys = allBuys.filter(b => b.remainingQty > 0 && b.date < s.date);
-                for (const buy of availableBuys) {
-                    if (qtyToMatch <= 0) break;
-                    const matched = Math.min(qtyToMatch, buy.remainingQty);
-                    matches.push({ qty: matched, buyDate: buy.date, rule: 'FIFO', cost: matched * buy.costPerUnit });
-                    buy.remainingQty -= matched;
-                    qtyToMatch -= matched;
-                }
-
-                const totalCost = matches.reduce((sum, m) => sum + m.cost, 0);
-                const matchedQty = s.remainingQty - qtyToMatch;
-                const proceeds = (matchedQty / Math.abs(s.quantity)) * s.totalEur;
-                disposals.push({
-                    ...s,
-                    quantity: -matchedQty,
-                    totalEur: proceeds,
-                    totalCost,
-                    gain: proceeds - totalCost,
-                    matches,
-                    qtyMatched: matchedQty
-                });
-                s.remainingQty = qtyToMatch;
-            });
-
-            // Rule 5: Loss Restriction (Section 581(3) TCA 1997)
-            // If any disposal resulted in a loss, and same-class shares were re-acquired within 4 weeks AFTER.
-            // Note: Section 581(3) says "loss arising on the disposal is only allowable against any gain that may accrue on the disposal of the shares reacquired".
-            disposals.filter(d => d.isin === isin && d.gain < 0).forEach(d => {
-                const fourWeeksAfter = new Date(d.date);
-                fourWeeksAfter.setDate(fourWeeksAfter.getDate() + 28);
-                // Check if any buy happened within 4 weeks after.
-                const reacquisition = txs.find(t => t.quantity > 0 && t.date > d.date && t.date <= fourWeeksAfter);
-                if (reacquisition) {
-                    d.restricted = true;
-                    d.notes = "Loss restricted (re-acquisition within 4 weeks)";
-                }
-            });
-        }
-
-        // Aggregate by year
-        yearSummaries = {};
-        disposals.forEach(d => {
-            const year = d.date.getFullYear();
-            if (!yearSummaries[year]) {
-                yearSummaries[year] = {
-                    grossGain: 0,
-                    allowableLoss: 0,
-                    disposals: []
-                };
-            }
-            yearSummaries[year].disposals.push(d);
-            if (d.gain > 0) {
-                yearSummaries[year].grossGain += d.gain;
-            } else if (!d.restricted) {
-                yearSummaries[year].allowableLoss += Math.abs(d.gain);
-            }
-        });
+        const result = window.calculateCGT(allTransactions);
+        yearSummaries = result.yearSummaries;
+        window.currentPortfolio = result.currentPortfolio;
 
         populateYearSelect();
         resultsDiv.classList.remove('hidden');
@@ -344,5 +111,98 @@ document.addEventListener('DOMContentLoaded', () => {
         const div = document.createElement('div');
         div.textContent = str;
         return div.innerHTML;
+    }
+
+    // Modal logic
+    if (viewPortfolioBtn) {
+        viewPortfolioBtn.addEventListener('click', () => {
+            populatePortfolioModal();
+            portfolioModal.classList.remove('hidden');
+        });
+    }
+
+    if (closeModalBtn) {
+        closeModalBtn.addEventListener('click', () => {
+            portfolioModal.classList.add('hidden');
+        });
+    }
+
+    if (portfolioModal) {
+        window.addEventListener('click', (e) => {
+            if (e.target === portfolioModal) {
+                portfolioModal.classList.add('hidden');
+            }
+        });
+    }
+
+    function populatePortfolioModal() {
+        if (!window.currentPortfolio) return;
+
+        portfolioTableBody.innerHTML = '';
+        const currentPrices = {};
+
+        for (const isin in window.currentPortfolio) {
+            const asset = window.currentPortfolio[isin];
+            if (asset.remainingQty <= 0) continue;
+
+            currentPrices[isin] = asset.lastKnownPrice;
+
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${escapeHtml(asset.product)}</td>
+                <td>${escapeHtml(asset.remainingQty.toString())}</td>
+                <td>€${escapeHtml(asset.averageCostBasis.toFixed(2))}</td>
+                <td><input type="number" step="0.01" class="price-input" data-isin="${escapeHtml(isin)}" value="${escapeHtml(asset.lastKnownPrice.toFixed(2))}"></td>
+                <td class="est-gain">€0.00</td>
+            `;
+            portfolioTableBody.appendChild(row);
+        }
+
+        updateEstimates(currentPrices);
+
+        // Add event listeners to inputs
+        const inputs = portfolioTableBody.querySelectorAll('.price-input');
+        inputs.forEach(input => {
+            input.addEventListener('input', (e) => {
+                const isin = e.target.getAttribute('data-isin');
+                const val = parseFloat(e.target.value);
+                if (!isNaN(val)) {
+                    currentPrices[isin] = val;
+                    updateEstimates(currentPrices);
+                }
+            });
+        });
+    }
+
+    function updateEstimates(currentPrices) {
+        // Update row-level gains
+        const rows = portfolioTableBody.querySelectorAll('tr');
+        rows.forEach(row => {
+            const input = row.querySelector('.price-input');
+            if (!input) return;
+            const isin = input.getAttribute('data-isin');
+            const asset = window.currentPortfolio[isin];
+            const price = currentPrices[isin];
+
+            const costBasis = asset.remainingQty * asset.averageCostBasis;
+            const proceeds = asset.remainingQty * price;
+            const gain = proceeds - costBasis;
+
+            const estGainCell = row.querySelector('.est-gain');
+            estGainCell.textContent = `€${gain.toFixed(2)}`;
+            estGainCell.className = `est-gain ${gain >= 0 ? 'gain' : 'loss'}`;
+        });
+
+        // Update overall summary using the simulateSellAll function
+        const summary = window.simulateSellAll(allTransactions, currentPrices);
+
+        const netGainBeforeExemption = Math.max(0, summary.grossGain - summary.allowableLoss);
+        const EXEMPTION = 1270;
+        const taxableGain = Math.max(0, netGainBeforeExemption - EXEMPTION);
+        const tax = taxableGain * 0.33;
+
+        document.getElementById('estGrossGain').textContent = `€${summary.grossGain.toFixed(2)}`;
+        document.getElementById('estAllowableLoss').textContent = `€${summary.allowableLoss.toFixed(2)}`;
+        document.getElementById('estTaxPayable').textContent = `€${tax.toFixed(2)}`;
     }
 });

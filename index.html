@@ -24,6 +24,7 @@
             <div class="controls">
                 <label for="yearSelect">Select Year:</label>
                 <select id="yearSelect"></select>
+                <button id="viewPortfolioBtn" class="button" style="margin-left: 20px;">View Portfolio & Estimate CGT</button>
             </div>
 
             <div class="dashboard">
@@ -67,6 +68,47 @@
             </div>
         </div>
     </div>
+
+    <!-- Portfolio Modal -->
+    <div id="portfolioModal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Current Portfolio & CGT Estimation</h2>
+            <p>Enter the current prices for your assets to see the estimated CGT if you were to sell everything today.</p>
+
+            <div class="table-wrapper">
+                <table id="portfolioTable">
+                    <thead>
+                        <tr>
+                            <th>Product</th>
+                            <th>Remaining Qty</th>
+                            <th>Avg Cost Basis</th>
+                            <th>Current Price (€)</th>
+                            <th>Est. Gain/Loss (€)</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <div class="estimation-summary">
+                <div class="card">
+                    <h3>Estimated Gross Gain</h3>
+                    <p id="estGrossGain">€0.00</p>
+                </div>
+                <div class="card">
+                    <h3>Estimated Allowable Loss</h3>
+                    <p id="estAllowableLoss">€0.00</p>
+                </div>
+                <div class="card highlight">
+                    <h3>Estimated Tax Payable (33%)</h3>
+                    <p id="estTaxPayable">€0.00</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="cgt.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
