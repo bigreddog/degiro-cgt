@@ -259,5 +259,63 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('estGrossGain').textContent = `€${summary.grossGain.toFixed(2)}`;
         document.getElementById('estAllowableLoss').textContent = `€${summary.allowableLoss.toFixed(2)}`;
         document.getElementById('estTaxPayable').textContent = `€${tax.toFixed(2)}`;
+
+        updateOptimizer(currentPrices);
+    }
+
+    function updateOptimizer(currentPrices) {
+        const today = new Date();
+        const currentYear = today.getFullYear();
+
+        // Find existing realized gains/losses for the current year
+        const yearSummary = yearSummaries[currentYear] || { grossGain: 0, allowableLoss: 0 };
+        const netRealizedGain = yearSummary.grossGain - yearSummary.allowableLoss;
+
+        const EXEMPTION = 1270;
+        let remainingExemption = EXEMPTION - netRealizedGain;
+
+        const optimizerResult = document.getElementById('optimizerResult');
+
+        if (remainingExemption <= 0) {
+            optimizerResult.textContent = `Your €1,270 exemption for ${currentYear} is already fully utilized.`;
+            return;
+        }
+
+        let bestAsset = null;
+        let bestSharesToSell = 0;
+        let bestGain = 0;
+
+        for (const isin in window.currentPortfolio) {
+            const asset = window.currentPortfolio[isin];
+            if (asset.remainingQty <= 0) continue;
+
+            const currentPrice = currentPrices[isin];
+            if (currentPrice <= asset.averageCostBasis) continue; // Only consider profitable assets
+
+            const gainPerShare = currentPrice - asset.averageCostBasis;
+
+            // How many shares can we sell without exceeding the remaining exemption?
+            const maxShares = Math.floor(remainingExemption / gainPerShare);
+
+            // We can't sell more than we own
+            const sharesToSell = Math.min(maxShares, asset.remainingQty);
+
+            if (sharesToSell > 0) {
+                const totalGain = sharesToSell * gainPerShare;
+
+                // Prioritize the asset that gets us closest to the exemption
+                if (totalGain > bestGain) {
+                    bestGain = totalGain;
+                    bestSharesToSell = sharesToSell;
+                    bestAsset = asset;
+                }
+            }
+        }
+
+        if (bestAsset) {
+            optimizerResult.innerHTML = `To maximize your remaining €${remainingExemption.toFixed(2)} exemption, consider selling <strong>${bestSharesToSell} shares of ${escapeHtml(bestAsset.product)}</strong> for an estimated tax-free gain of €${bestGain.toFixed(2)}.`;
+        } else {
+            optimizerResult.textContent = `No profitable assets found to utilize your remaining €${remainingExemption.toFixed(2)} exemption.`;
+        }
     }
 });
