@@ -139,7 +139,8 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             // A simple free proxy to Yahoo Finance, no auth required
             // Yahoo Finance symbol lookup can be tricky, this works decently for many ISINs.
-            const searchUrl = `https://query2.finance.yahoo.com/v1/finance/search?q=${isin}&quotesCount=1`;
+            // Fetch multiple quotes in case the primary is a US ADR or non-equity listing.
+            const searchUrl = `https://query2.finance.yahoo.com/v1/finance/search?q=${isin}&quotesCount=10`;
             const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(searchUrl)}`;
 
             const response = await fetch(proxyUrl);
@@ -147,7 +148,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const result = JSON.parse(data.contents);
 
             if (result && result.quotes && result.quotes.length > 0) {
-                const symbol = result.quotes[0].symbol;
+                // Find the first equity listing. We prefer non-US exchanges for European ISINs if possible.
+                // But as a fallback, take the first valid equity.
+                let bestQuote = result.quotes.find(q => q.quoteType === 'EQUITY' || q.quoteType === 'ETF');
+                if (!bestQuote) bestQuote = result.quotes[0];
+
+                const symbol = bestQuote.symbol;
 
                 const quoteUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
                 const proxyQuoteUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(quoteUrl)}`;
@@ -157,7 +163,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 const quoteResult = JSON.parse(quoteData.contents);
 
                 if (quoteResult && quoteResult.chart && quoteResult.chart.result && quoteResult.chart.result.length > 0) {
-                    const price = quoteResult.chart.result[0].meta.regularMarketPrice;
+                    let price = quoteResult.chart.result[0].meta.regularMarketPrice;
+                    const currency = quoteResult.chart.result[0].meta.currency;
+
+                    if (currency && currency !== 'EUR') {
+                        try {
+                            const fxSymbol = `${currency}EUR=X`;
+                            const fxUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${fxSymbol}`;
+                            const proxyFxUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(fxUrl)}`;
+
+                            const fxResponse = await fetch(proxyFxUrl);
+                            const fxData = await fxResponse.json();
+                            const fxResult = JSON.parse(fxData.contents);
+
+                            if (fxResult && fxResult.chart && fxResult.chart.result && fxResult.chart.result.length > 0) {
+                                const rate = fxResult.chart.result[0].meta.regularMarketPrice;
+                                price = price * rate;
+                            }
+                        } catch (fxErr) {
+                            console.error(`Failed to fetch exchange rate for ${currency} to EUR`, fxErr);
+                        }
+                    }
+
                     return price;
                 }
             }
