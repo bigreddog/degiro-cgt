@@ -137,40 +137,37 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function fetchLivePrice(isin, productName) {
         try {
-            // A simple free proxy to Yahoo Finance, no auth required
             // Yahoo Finance symbol lookup can be tricky, this works decently for many ISINs.
             // Fetch multiple quotes in case the primary is a US ADR or non-equity listing.
             const searchUrl = `https://query2.finance.yahoo.com/v1/finance/search?q=${isin}&quotesCount=10`;
-            const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(searchUrl)}`;
 
-            const response = await fetch(proxyUrl);
-            const data = await response.json();
-            let result = JSON.parse(data.contents);
+            let response = await fetch(searchUrl);
+            let result = await response.json();
 
             if (!result || !result.quotes || result.quotes.length === 0) {
                 // Fallback to searching by sanitized product name if ISIN fails
                 const sanitizedName = productName.replace(/\b(CLASS \w*|INC|PLC|LTD|CORP)\b/gi, '').trim();
                 const fallbackUrl = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(sanitizedName)}&quotesCount=10`;
-                const fallbackProxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(fallbackUrl)}`;
-                const fallbackResponse = await fetch(fallbackProxyUrl);
-                const fallbackData = await fallbackResponse.json();
-                result = JSON.parse(fallbackData.contents);
+                const fallbackResponse = await fetch(fallbackUrl);
+                result = await fallbackResponse.json();
             }
 
             if (result && result.quotes && result.quotes.length > 0) {
-                // Find the first equity listing. We prefer non-US exchanges for European ISINs if possible.
-                // But as a fallback, take the first valid equity.
-                let bestQuote = result.quotes.find(q => q.quoteType === 'EQUITY' || q.quoteType === 'ETF');
+                // Find the best equity listing. For major US tech stocks traded in Europe, the ISIN is the US ISIN.
+                // If we don't prioritize US exchanges (NMS, NYQ) for those US ISINs/companies, Yahoo will return
+                // low-volume, illiquid secondary cross-listings in Germany or similar, with wildly stale prices.
+                let bestQuote = result.quotes.find(q => (q.quoteType === 'EQUITY' || q.quoteType === 'ETF') && (q.exchange === 'NMS' || q.exchange === 'NYQ'));
+
+                if (!bestQuote) {
+                    bestQuote = result.quotes.find(q => q.quoteType === 'EQUITY' || q.quoteType === 'ETF');
+                }
                 if (!bestQuote) bestQuote = result.quotes[0];
 
                 const symbol = bestQuote.symbol;
 
                 const quoteUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
-                const proxyQuoteUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(quoteUrl)}`;
-
-                const quoteResponse = await fetch(proxyQuoteUrl);
-                const quoteData = await quoteResponse.json();
-                const quoteResult = JSON.parse(quoteData.contents);
+                const quoteResponse = await fetch(quoteUrl);
+                const quoteResult = await quoteResponse.json();
 
                 if (quoteResult && quoteResult.chart && quoteResult.chart.result && quoteResult.chart.result.length > 0) {
                     let price = quoteResult.chart.result[0].meta.regularMarketPrice;
@@ -180,11 +177,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         try {
                             const fxSymbol = `${currency}EUR=X`;
                             const fxUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${fxSymbol}`;
-                            const proxyFxUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(fxUrl)}`;
-
-                            const fxResponse = await fetch(proxyFxUrl);
-                            const fxData = await fxResponse.json();
-                            const fxResult = JSON.parse(fxData.contents);
+                            const fxResponse = await fetch(fxUrl);
+                            const fxResult = await fxResponse.json();
 
                             if (fxResult && fxResult.chart && fxResult.chart.result && fxResult.chart.result.length > 0) {
                                 const rate = fxResult.chart.result[0].meta.regularMarketPrice;
