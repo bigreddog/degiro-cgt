@@ -135,7 +135,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    async function fetchLivePrice(isin) {
+    async function fetchLivePrice(isin, productName) {
         try {
             // A simple free proxy to Yahoo Finance, no auth required
             // Yahoo Finance symbol lookup can be tricky, this works decently for many ISINs.
@@ -145,7 +145,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const response = await fetch(proxyUrl);
             const data = await response.json();
-            const result = JSON.parse(data.contents);
+            let result = JSON.parse(data.contents);
+
+            if (!result || !result.quotes || result.quotes.length === 0) {
+                // Fallback to searching by sanitized product name if ISIN fails
+                const sanitizedName = productName.replace(/\b(CLASS \w*|INC|PLC|LTD|CORP)\b/gi, '').trim();
+                const fallbackUrl = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(sanitizedName)}&quotesCount=10`;
+                const fallbackProxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(fallbackUrl)}`;
+                const fallbackResponse = await fetch(fallbackProxyUrl);
+                const fallbackData = await fallbackResponse.json();
+                result = JSON.parse(fallbackData.contents);
+            }
 
             if (result && result.quotes && result.quotes.length > 0) {
                 // Find the first equity listing. We prefer non-US exchanges for European ISINs if possible.
@@ -242,7 +252,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const asset = window.currentPortfolio[isin];
             if (asset.remainingQty <= 0) continue;
 
-            fetchLivePrice(isin).then(livePrice => {
+            fetchLivePrice(isin, asset.product).then(livePrice => {
                 if (livePrice !== null && !isNaN(livePrice)) {
                     const inputElement = document.getElementById(`price-input-${isin}`);
                     if (inputElement) {
