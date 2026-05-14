@@ -189,7 +189,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }
 
-                    return price;
+                    return { price, symbol };
                 }
             }
             return null;
@@ -215,9 +215,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Give inputs an ID so we can target them later
             const inputId = `price-input-${isin}`;
+            const linkId = `product-link-${isin}`;
 
             row.innerHTML = `
-                <td>${escapeHtml(asset.product)}</td>
+                <td><a href="https://finance.yahoo.com/lookup?s=${encodeURIComponent(isin)}" target="_blank" id="${escapeHtml(linkId)}" style="color: #2980b9; text-decoration: none;">${escapeHtml(asset.product)}</a></td>
                 <td>${escapeHtml(asset.remainingQty.toString())}</td>
                 <td>€${escapeHtml(asset.averageCostBasis.toFixed(2))}</td>
                 <td><input type="number" step="0.01" class="price-input" id="${escapeHtml(inputId)}" data-isin="${escapeHtml(isin)}" value="${escapeHtml(asset.lastKnownPrice.toFixed(2))}"></td>
@@ -246,14 +247,19 @@ document.addEventListener('DOMContentLoaded', () => {
             const asset = window.currentPortfolio[isin];
             if (asset.remainingQty <= 0) continue;
 
-            fetchLivePrice(isin, asset.product).then(livePrice => {
-                if (livePrice !== null && !isNaN(livePrice)) {
+            fetchLivePrice(isin, asset.product).then(liveData => {
+                if (liveData !== null && !isNaN(liveData.price)) {
                     const inputElement = document.getElementById(`price-input-${isin}`);
                     if (inputElement) {
-                        inputElement.value = livePrice.toFixed(2);
+                        inputElement.value = liveData.price.toFixed(2);
 
                         // Fire an artificial input event to trigger our estimation update
                         inputElement.dispatchEvent(new Event('input'));
+                    }
+
+                    const linkElement = document.getElementById(`product-link-${isin}`);
+                    if (linkElement && liveData.symbol) {
+                        linkElement.href = `https://finance.yahoo.com/quote/${encodeURIComponent(liveData.symbol)}`;
                     }
                 }
             });
