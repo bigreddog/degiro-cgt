@@ -62,6 +62,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function populateYearSelect() {
         const years = Object.keys(yearSummaries).sort((a, b) => b - a);
+        const currentYear = new Date().getFullYear().toString();
+        if (!years.includes(currentYear)) {
+            years.unshift(currentYear);
+        }
         yearSelect.innerHTML = years.map(y => `<option value="${y}">${y}</option>`).join('');
     }
 
@@ -140,7 +144,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Yahoo Finance symbol lookup can be tricky, this works decently for many ISINs.
             // Fetch multiple quotes in case the primary is a US ADR or non-equity listing.
             const searchUrl = `https://query2.finance.yahoo.com/v1/finance/search?q=${isin}&quotesCount=10`;
-            const proxySearchUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(searchUrl)}`;
+            const proxySearchUrl = `https://corsproxy.io/?url=${encodeURIComponent(searchUrl)}`;
 
             let response = await fetch(proxySearchUrl);
             let result = await response.json();
@@ -149,7 +153,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Fallback to searching by sanitized product name if ISIN fails
                 const sanitizedName = productName.replace(/\b(CLASS \w*|INC|PLC|LTD|CORP)\b/gi, '').trim();
                 const fallbackUrl = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(sanitizedName)}&quotesCount=10`;
-                const proxyFallbackUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(fallbackUrl)}`;
+                const proxyFallbackUrl = `https://corsproxy.io/?url=${encodeURIComponent(fallbackUrl)}`;
                 const fallbackResponse = await fetch(proxyFallbackUrl);
                 result = await fallbackResponse.json();
             }
@@ -168,7 +172,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const symbol = bestQuote.symbol;
 
                 const quoteUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
-                const proxyQuoteUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(quoteUrl)}`;
+                const proxyQuoteUrl = `https://corsproxy.io/?url=${encodeURIComponent(quoteUrl)}`;
                 const quoteResponse = await fetch(proxyQuoteUrl);
                 const quoteResult = await quoteResponse.json();
 
@@ -183,7 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         try {
                             const fxSymbol = `${currency}EUR=X`;
                             const fxUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${fxSymbol}`;
-                            const proxyFxUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(fxUrl)}`;
+                            const proxyFxUrl = `https://corsproxy.io/?url=${encodeURIComponent(fxUrl)}`;
                             const fxResponse = await fetch(proxyFxUrl);
                             const fxResult = await fxResponse.json();
 
