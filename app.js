@@ -140,15 +140,17 @@ document.addEventListener('DOMContentLoaded', () => {
             // Yahoo Finance symbol lookup can be tricky, this works decently for many ISINs.
             // Fetch multiple quotes in case the primary is a US ADR or non-equity listing.
             const searchUrl = `https://query2.finance.yahoo.com/v1/finance/search?q=${isin}&quotesCount=10`;
+            const proxySearchUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(searchUrl)}`;
 
-            let response = await fetch(searchUrl);
+            let response = await fetch(proxySearchUrl);
             let result = await response.json();
 
             if (!result || !result.quotes || result.quotes.length === 0) {
                 // Fallback to searching by sanitized product name if ISIN fails
                 const sanitizedName = productName.replace(/\b(CLASS \w*|INC|PLC|LTD|CORP)\b/gi, '').trim();
                 const fallbackUrl = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(sanitizedName)}&quotesCount=10`;
-                const fallbackResponse = await fetch(fallbackUrl);
+                const proxyFallbackUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(fallbackUrl)}`;
+                const fallbackResponse = await fetch(proxyFallbackUrl);
                 result = await fallbackResponse.json();
             }
 
@@ -166,30 +168,35 @@ document.addEventListener('DOMContentLoaded', () => {
                 const symbol = bestQuote.symbol;
 
                 const quoteUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
-                const quoteResponse = await fetch(quoteUrl);
+                const proxyQuoteUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(quoteUrl)}`;
+                const quoteResponse = await fetch(proxyQuoteUrl);
                 const quoteResult = await quoteResponse.json();
 
                 if (quoteResult && quoteResult.chart && quoteResult.chart.result && quoteResult.chart.result.length > 0) {
-                    let price = quoteResult.chart.result[0].meta.regularMarketPrice;
-                    const currency = quoteResult.chart.result[0].meta.currency;
+                    const meta = quoteResult.chart.result[0].meta;
+                    let localPrice = meta.regularMarketPrice;
+                    let price = localPrice;
+                    const currency = meta.currency;
+                    const exchange = meta.fullExchangeName || meta.exchangeName;
 
                     if (currency && currency !== 'EUR') {
                         try {
                             const fxSymbol = `${currency}EUR=X`;
                             const fxUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${fxSymbol}`;
-                            const fxResponse = await fetch(fxUrl);
+                            const proxyFxUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(fxUrl)}`;
+                            const fxResponse = await fetch(proxyFxUrl);
                             const fxResult = await fxResponse.json();
 
                             if (fxResult && fxResult.chart && fxResult.chart.result && fxResult.chart.result.length > 0) {
                                 const rate = fxResult.chart.result[0].meta.regularMarketPrice;
-                                price = price * rate;
+                                price = localPrice * rate;
                             }
                         } catch (fxErr) {
                             console.error(`Failed to fetch exchange rate for ${currency} to EUR`, fxErr);
                         }
                     }
 
-                    return { price, symbol };
+                    return { price, localPrice, symbol, exchange, currency };
                 }
             }
             return null;
@@ -216,11 +223,19 @@ document.addEventListener('DOMContentLoaded', () => {
             // Give inputs an ID so we can target them later
             const inputId = `price-input-${isin}`;
             const linkId = `product-link-${isin}`;
+            const tickerId = `ticker-${isin}`;
+            const exchangeId = `exchange-${isin}`;
+            const currencyId = `currency-${isin}`;
+            const localPriceId = `local-price-${isin}`;
 
             row.innerHTML = `
                 <td><a href="https://finance.yahoo.com/lookup?s=${encodeURIComponent(isin)}" target="_blank" id="${escapeHtml(linkId)}" style="color: #2980b9; text-decoration: none;">${escapeHtml(asset.product)}</a></td>
+                <td id="${escapeHtml(tickerId)}">...</td>
+                <td id="${escapeHtml(exchangeId)}">...</td>
+                <td id="${escapeHtml(currencyId)}">...</td>
                 <td>${escapeHtml(asset.remainingQty.toString())}</td>
                 <td>€${escapeHtml(asset.averageCostBasis.toFixed(2))}</td>
+                <td id="${escapeHtml(localPriceId)}">...</td>
                 <td><input type="number" step="0.01" class="price-input" id="${escapeHtml(inputId)}" data-isin="${escapeHtml(isin)}" value="${escapeHtml(asset.lastKnownPrice.toFixed(2))}"></td>
                 <td class="est-gain">€0.00</td>
             `;
@@ -261,6 +276,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (linkElement && liveData.symbol) {
                         linkElement.href = `https://finance.yahoo.com/quote/${encodeURIComponent(liveData.symbol)}`;
                     }
+
+                    const tickerElement = document.getElementById(`ticker-${isin}`);
+                    if (tickerElement) tickerElement.textContent = liveData.symbol;
+
+                    const exchangeElement = document.getElementById(`exchange-${isin}`);
+                    if (exchangeElement) exchangeElement.textContent = liveData.exchange;
+
+                    const currencyElement = document.getElementById(`currency-${isin}`);
+                    if (currencyElement) currencyElement.textContent = liveData.currency;
+
+                    const localPriceElement = document.getElementById(`local-price-${isin}`);
+                    if (localPriceElement) localPriceElement.textContent = `${liveData.localPrice.toFixed(2)} ${liveData.currency}`;
                 }
             });
         }
