@@ -70,8 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function displayYear(year) {
-        const summary = yearSummaries[year];
-        if (!summary) return;
+        const summary = yearSummaries[year] || { grossGain: 0, allowableLoss: 0, disposals: [] };
 
         const netGainBeforeExemption = Math.max(0, summary.grossGain - summary.allowableLoss);
         const EXEMPTION = 1270;
